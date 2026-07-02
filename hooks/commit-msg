@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# MuvAuto commit-msg hook
+# Enforces Conventional Commits format: type(scope): description
+# Install: ./scripts/setup-hooks.sh
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Skip merge commits and fixup commits
+if echo "$COMMIT_MSG" | grep -qE "^(Merge|fixup!|squash!)"; then
+  exit 0
+fi
+
+PATTERN="^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\([a-z0-9_-]+\))?: .{1,100}$"
+
+if ! echo "$COMMIT_MSG" | grep -qE "$PATTERN"; then
+  echo ""
+  echo "❌ Formato de commit inválido."
+  echo ""
+  echo "   Esperado: type(scope): descrição"
+  echo "   Exemplo:  feat(dashboard): adicionar gauge de temperatura"
+  echo ""
+  echo "   Tipos permitidos:"
+  echo "   feat fix docs style refactor test chore perf ci build revert"
+  echo ""
+  echo "   Sua mensagem: $COMMIT_MSG"
+  exit 1
+fi

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# MuvAuto pre-commit hook
+# Runs dart analyze on staged changes before every commit.
+# Install: ./scripts/setup-hooks.sh
+
+set -e
+
+# Detect if this is a Flutter or pure Dart project
+if [ -f "pubspec.yaml" ]; then
+  if grep -q "flutter:" pubspec.yaml 2>/dev/null; then
+    ANALYZER="flutter analyze"
+  else
+    ANALYZER="dart analyze"
+  fi
+else
+  echo "⚠ pre-commit: pubspec.yaml not found, skipping analysis."
+  exit 0
+fi
+
+echo "🔍 Analisando código..."
+if ! $ANALYZER --no-fatal-warnings 2>&1; then
+  echo ""
+  echo "❌ Análise falhou. Corrija os erros antes de commitar."
+  echo "   Dica: rode '$ANALYZER' para ver todos os problemas."
+  exit 1
+fi
+
+echo "✅ Análise ok."

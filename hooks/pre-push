@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# MuvAuto pre-push hook
+# Runs flutter test before pushing to any branch.
+# Install: ./scripts/setup-hooks.sh
+
+set -e
+
+if [ ! -f "pubspec.yaml" ]; then
+  exit 0
+fi
+
+# Skip if no test directory exists
+if [ ! -d "test" ]; then
+  echo "ℹ pre-push: sem diretório test/, pulando testes."
+  exit 0
+fi
+
+echo "🧪 Rodando testes antes do push..."
+if ! flutter test 2>&1; then
+  echo ""
+  echo "❌ Testes falharam. Corrija antes de fazer push."
+  echo "   Para pular (não recomendado): git push --no-verify"
+  exit 1
+fi
+
+echo "✅ Testes passando."

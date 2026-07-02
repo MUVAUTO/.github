@@ -1,0 +1,150 @@
+name: Sync Architecture Docs
+
+# Reusable workflow — call it from any app/package repo after merging to main.
+# It reads the merged diff, calls Claude to summarize architectural changes,
+# and opens a PR in MUVAUTO/docs with the proposed update.
+#
+# Secrets required (org-level):
+#   ANTHROPIC_API_KEY      — Anthropic API key for Claude
+#   MUVAUTO_SSH_PRIVATE_KEY — SSH key with read access to all MUVAUTO repos
+#   MUVAUTO_DOCS_PAT       — PAT with repo write access to MUVAUTO/docs
+
+on:
+  workflow_call:
+    inputs:
+      repo_name:
+        description: "Human-readable name of the calling repo (e.g. dashboard, muv-auto-core)"
+        required: true
+        type: string
+      doc_section:
+        description: "Which doc file to update (relative to docs/), e.g. engineering/01-ecosystem-architecture.md"
+        required: false
+        type: string
+        default: "engineering/01-ecosystem-architecture.md"
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+    # Only run on pushes to main (i.e., after a merge)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout calling repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get merged diff
+        id: diff
+        run: |
+          # Diff of the last merge commit (lib/ and pubspec only — skip generated files)
+          git diff HEAD~1 HEAD \
+            -- 'lib/**' 'pubspec.yaml' 'pubspec.lock' \
+            ':!lib/src/generated/**' \
+            ':!pubspec.lock' \
+            | head -c 8000 > /tmp/diff.txt
+
+          echo "diff_length=$(wc -c < /tmp/diff.txt)" >> $GITHUB_OUTPUT
+
+          # Get commit message
+          echo "commit_msg=$(git log -1 --pretty=%B | head -5)" >> $GITHUB_OUTPUT
+
+      - name: Checkout docs repo
+        uses: actions/checkout@v4
+        with:
+          repository: MUVAUTO/docs
+          token: ${{ secrets.MUVAUTO_DOCS_PAT }}
+          path: docs-repo
+
+      - name: Read current doc section
+        id: current_doc
+        run: |
+          DOC_PATH="docs-repo/${{ inputs.doc_section }}"
+          if [ -f "$DOC_PATH" ]; then
+            # Send only the first 4000 chars to stay within token budget
+            head -c 4000 "$DOC_PATH" > /tmp/current_doc.txt
+          else
+            echo "# (novo arquivo)" > /tmp/current_doc.txt
+          fi
+
+      - name: Call Claude to generate doc update
+        id: claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          DIFF=$(cat /tmp/diff.txt | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          CURRENT=$(cat /tmp/current_doc.txt | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          COMMIT="${{ steps.diff.outputs.commit_msg }}"
+          REPO="${{ inputs.repo_name }}"
+
+          PAYLOAD=$(python3 -c "
+          import json
+          diff = $DIFF
+          current = $CURRENT
+          prompt = f'''You are a technical documentation assistant for the MuvAuto project.
+
+          A change was just merged into the \"{REPO}\" repository.
+
+          Commit message:
+          {COMMIT}
+
+          Git diff (lib/ and pubspec only):
+          {diff}
+
+          Current content of docs/{{\"{inputs.doc_section}\"}}:
+          {current}
+
+          Task: Based on the diff, propose a concise update to the documentation.
+          - If the change is trivial (formatting, minor fix), return exactly: NO_UPDATE_NEEDED
+          - Otherwise, return ONLY the updated markdown content for the file (complete file, not a snippet)
+          - Keep the same structure and tone as the current doc
+          - Add or update sections that reflect what changed architecturally
+          - Do not add fluff — be technical and concise
+          - Write in the same language as the current doc (Portuguese)
+          '''
+          print(json.dumps({'model': 'claude-haiku-4-5-20251001', 'max_tokens': 4096, 'messages': [{'role': 'user', 'content': prompt}]}))
+          ")
+
+          RESPONSE=$(curl -sf https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD")
+
+          CONTENT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['content'][0]['text'])")
+          echo "$CONTENT" > /tmp/proposed_update.txt
+
+          if [ "$CONTENT" = "NO_UPDATE_NEEDED" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Apply proposed update
+        if: steps.claude.outputs.skip != 'true'
+        run: |
+          cp /tmp/proposed_update.txt "docs-repo/${{ inputs.doc_section }}"
+
+      - name: Open PR in docs repo
+        if: steps.claude.outputs.skip != 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.MUVAUTO_DOCS_PAT }}
+          path: docs-repo
+          commit-message: "docs(${{ inputs.repo_name }}): auto-update after merge — ${{ steps.diff.outputs.commit_msg }}"
+          branch: "auto-docs/${{ inputs.repo_name }}-${{ github.sha }}"
+          title: "[auto] ${{ inputs.repo_name }}: atualizar docs após merge"
+          body: |
+            ## Atualização automática de documentação
+
+            **Repo de origem:** `${{ inputs.repo_name }}`
+            **Commit:** ${{ github.sha }}
+            **Mensagem:** ${{ steps.diff.outputs.commit_msg }}
+
+            Esta PR foi gerada automaticamente pelo workflow `doc-sync` após um merge em `main`.
+            Revise as mudanças propostas pelo Claude antes de fazer o merge.
+
+            ---
+            *Gerado por [doc-sync.yml](https://github.com/MUVAUTO/.github/blob/main/.github/workflows/doc-sync.yml)*
+          labels: documentation,automated
+          delete-branch: true

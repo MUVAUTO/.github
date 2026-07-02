@@ -1,0 +1,52 @@
+name: Flutter CI
+
+on:
+  workflow_call:
+    inputs:
+      flutter_version:
+        required: false
+        type: string
+        default: '3.32.x'
+      run_tests:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH for private MUVAUTO packages
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MUVAUTO_SSH_PRIVATE_KEY }}
+
+      - name: Add GitHub to known hosts
+        run: ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: dart analyze --fatal-infos
+
+      - name: Run tests
+        if: ${{ inputs.run_tests }}
+        run: flutter test --coverage
+
+      - name: Upload coverage
+        if: ${{ inputs.run_tests }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/lcov.info
+          fail_ci_if_error: false
