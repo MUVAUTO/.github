@@ -25,8 +25,9 @@ on:
 jobs:
   sync-docs:
     runs-on: ubuntu-latest
-    # Only run on pushes to main (i.e., after a merge)
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Disabled: MUVAUTO/docs was archived on 2026-11-08. Callers stay green
+    # until they drop the doc-sync job from their own CI.
+    if: false
 
     steps:
       - name: Checkout calling repo
